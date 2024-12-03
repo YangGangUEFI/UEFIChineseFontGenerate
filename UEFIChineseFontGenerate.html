@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>UEFI EFI_WIDE_GLYPH 汉字字库生成器</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(16, 20px); gap: 2px; margin-top: 10px; }
+        .pixel { width: 20px; height: 20px; background-color: #f0f0f0; border: 1px solid #ccc; }
+        .pixel.active { background-color: black; }
+        textarea { width: 100%; min-height: 150px; font-family: monospace; }
+        .file-input-container { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>UEFI EFI_WIDE_GLYPH 汉字字库生成器</h1>
+
+    <div class="file-input-container">
+        <label for="fontFile">选择字体文件：</label>
+        <input type="file" id="fontFile" accept=".hex,.otf,.ttf">
+    </div>
+
+    <div>
+        <label for="charInput">输入汉字：</label>
+        <input type="text" id="charInput" placeholder="请输入汉字">
+        <button onclick="generateGlyphs()">生成字库</button>
+    </div>
+
+    <div>
+        <h3>输出字库信息</h3>
+        <textarea id="outputArea" readonly></textarea>
+    </div>
+
+    <div>
+        <h3>点阵预览</h3>
+        <div id="glyphPreview" class="grid"></div>
+    </div>
+
+    <script>
+    let fontData = null;
+    let fontType = null;
+
+    document.getElementById('fontFile').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        const allowedExtensions = ['hex', 'otf', 'ttf'];
+        const fileExtension = file.name.split('.').pop().toLowerCase();
+
+        // Check if the file extension is allowed
+        if (!allowedExtensions.includes(fileExtension)) {
+            alert('请选择支持的字体文件类型 (.hex, .otf, .ttf)');
+            // Clear the file input
+            e.target.value = '';
+            return;
+        }
+
+        const reader = new FileReader();
+
+        reader.onload = function(event) {
+            fontData = event.target.result;
+            fontType = fileExtension;
+        };
+
+        reader.readAsText(file);
+    });
+
+    function extractCharacterBitmap(char) {
+        if (!fontData) {
+            alert('请先上传字体文件');
+            return null;
+        }
+
+        const charCode = char.charCodeAt(0).toString(16).toUpperCase();
+
+        if (fontType === 'hex') {
+            // 从 HEX 文件中查找字符数据
+            const lines = fontData.split('\n');
+            const charLine = lines.find(line => line.startsWith(charCode + ':'));
+
+            if (!charLine) return null;
+
+            // 提取 HEX 数据
+            const hexData = charLine.split(':')[1].replace(/\s/g, '');
+            const bitmap = new Uint8Array(32);
+            for (let i = 0; i < 32; i++) {
+                bitmap[i] = parseInt(hexData.substr(i*2, 2), 16);
+            }
+            return bitmap;
+        } else if (fontType === 'otf' || fontType === 'ttf') {
+            alert('即将支持此类型文件');
+        } else {
+            alert('不支持的字体文件');
+        }
+
+    }
+
+    function generateGlyphs() {
+        const input = document.getElementById('charInput').value;
+        const outputArea = document.getElementById('outputArea');
+        const glyphPreview = document.getElementById('glyphPreview');
+
+        glyphPreview.innerHTML = '';
+        outputArea.value = '';
+
+        for (let char of input) {
+            const bitmap = extractCharacterBitmap(char);
+
+            if (!bitmap) {
+                outputArea.value += `无法找到字符 ${char} 的字体数据\n`;
+                continue;
+            }
+
+            const binaryData = convertToEFIWideGlyph(bitmap, char);
+
+            outputArea.value += binaryData.fullOutput;
+            let charIndex = input.indexOf(char)
+            renderGlyphPreview(binaryData.glyphData, glyphPreview, charIndex);
+        }
+    }
+
+    function convertToEFIWideGlyph(bitmap, char) {
+        const extendedBitmap = extendBitmap(bitmap);
+
+        const col1 = extendedBitmap.slice(0, 19);  // 左半部分
+        const col2 = extendedBitmap.slice(19);     // 右半部分
+
+        let fullOutput = `{0x${char.charCodeAt(0).toString(16)}, 0x00, `;
+
+        // 第一列（左半部分）
+        fullOutput += `{${col1.map(b => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`).join(', ')}}, `;
+
+        // 第二列（右半部分）
+        fullOutput += `{${col2.map(b => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`).join(', ')}}, `;
+
+        // Pad
+        fullOutput += `{0x00,0x00,0x00}},`;
+
+        // Chinese
+        fullOutput += ``;
+
+        fullOutput += `        // ${char.toString()}\n`;
+
+        return {
+            fullOutput,
+            glyphData: extendedBitmap
+        };
+    }
+
+    function extendBitmap(bitmap) {
+        const extendedBitmap = new Array(38).fill(0);
+
+        for (let i = 0; i < 16; i++) {
+            const rowHigh = bitmap[i * 2];     // 左半部分
+            const rowLow = bitmap[i * 2 + 1];  // 右半部分
+            extendedBitmap[i] = rowHigh;
+            extendedBitmap[i + 19] = rowLow;
+        }
+
+        return extendedBitmap;
+    }
+
+    function renderGlyphPreview(glyphData, container, glyphIndex, options = {}) {
+        const {
+            pixelSize = 10,
+            maxColumns = 5,
+            gapX = 5,
+            gapY = 5
+        } = options;
+
+        // 计算当前字形的位置
+        const row = Math.floor(glyphIndex / maxColumns);
+        const col = glyphIndex % maxColumns;
+
+        // 如果是第一次渲染，清空容器并设置容器样式
+        if (glyphIndex === 0) {
+            container.innerHTML = '';
+            container.style.position = 'relative';
+            container.style.display = 'grid';
+            container.style.gridTemplateColumns = `repeat(${maxColumns}, auto)`;
+            container.style.gap = `${gapY}px ${gapX}px`;
+        }
+
+        // 创建字形容器
+        const glyphContainer = document.createElement('div');
+        glyphContainer.style.position = 'relative';
+        glyphContainer.style.width = `${16 * pixelSize}px`;
+        glyphContainer.style.height = `${19 * pixelSize}px`;
+
+        for (let row_pixel = 0; row_pixel < 19; row_pixel++) {
+            for (let col_pixel = 0; col_pixel < 16; col_pixel++) {
+                const pixel = document.createElement('div');
+                pixel.style.position = 'absolute';
+                pixel.style.width = `${pixelSize}px`;
+                pixel.style.height = `${pixelSize}px`;
+                pixel.style.left = `${col_pixel * pixelSize}px`;
+                pixel.style.top = `${row_pixel * pixelSize}px`;
+
+                const byteIndex = col_pixel < 8 ? row_pixel : row_pixel + 19;
+                const bitPosition = col_pixel % 8;
+                const byte = glyphData[byteIndex];
+                const isActive = (byte & (1 << (7 - bitPosition))) !== 0;
+
+                pixel.classList.add('pixel');
+                if (isActive) {
+                    pixel.classList.add('active');
+                }
+                
+                glyphContainer.appendChild(pixel);
+            }
+        }
+
+        // 添加索引标签
+        const indexLabel = document.createElement('div');
+        indexLabel.textContent = `Glyph ${glyphIndex}`;
+        indexLabel.style.textAlign = 'center';
+        indexLabel.style.width = `${16 * pixelSize}px`;
+
+        const wrapper = document.createElement('div');
+        wrapper.appendChild(indexLabel);
+        wrapper.appendChild(glyphContainer);
+
+        container.appendChild(wrapper);
+    }
+
+
+    </script>
+</body>
+</html>
