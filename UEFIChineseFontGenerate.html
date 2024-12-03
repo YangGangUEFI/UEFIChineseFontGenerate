@@ -3,6 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <title>UEFI EFI_WIDE_GLYPH 汉字字库生成器</title>
+    <!-- opentype.js - https://opentype.js.org/ -->
+    <!-- The MIT License (MIT) -->
+    <!-- Copyright (c) 2020 Frederik De Bleser -->
+    <script src="https://opentype.js.org/dist/opentype.js"></script>
     <style>
         body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
         .grid { display: grid; grid-template-columns: repeat(16, 20px); gap: 2px; margin-top: 10px; }
@@ -22,7 +26,7 @@
 
     <div>
         <label for="charInput">输入汉字：</label>
-        <input type="text" id="charInput" placeholder="请输入汉字">
+        <input type="text" id="charInput" placeholder="请输入汉字" onkeypress="handleKeyPress(event)">
         <button onclick="generateGlyphs()">生成字库</button>
     </div>
 
@@ -60,7 +64,11 @@
             fontType = fileExtension;
         };
 
-        reader.readAsText(file);
+        if (fileExtension === 'hex') {
+            reader.readAsText(file);
+        } else {
+            reader.readAsArrayBuffer(file);
+        }
     });
 
     function extractCharacterBitmap(char) {
@@ -86,7 +94,53 @@
             }
             return bitmap;
         } else if (fontType === 'otf' || fontType === 'ttf') {
-            alert('即将支持此类型文件');
+            try {
+                const font = opentype.parse(fontData);
+                const glyph = font.charToGlyph(char);
+                const bitmap = new Uint8Array(32);
+
+                // 创建一个临时的 canvas 来绘制字形
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = 16;
+                canvas.height = 16;
+                ctx.clearRect(0, 0, 16, 16);
+
+                // 设置绘制参数
+                ctx.fillStyle = 'black';
+                const path = glyph.getPath(0, 14, 16);
+                path.fill = 'black';
+                path.draw(ctx);
+
+                // 获取像素数据
+                const imageData = ctx.getImageData(0, 0, 16, 16);
+                const pixels = imageData.data;
+
+                // 将像素数据转换为位图格式
+                let byteIndex = 0;
+                for (let y = 0; y < 16; y++) {
+                    let byte1 = 0;
+                    let byte2 = 0;
+                    for (let x = 0; x < 16; x++) {
+                        // pixels: [r, g, b, a, r, g, b, a, ...]
+                        const pixelIndex = (y * 16 + x) * 4;
+                        const isBlack = pixels[pixelIndex+3] === 0xff; // 检查像素是否为黑色
+
+                        if (x < 8) {
+                            byte1 |= (isBlack ? 1 : 0) << (7 - (x % 8));
+                        } else {
+                            byte2 |= (isBlack ? 1 : 0) << (7 - (x % 8));
+                        }
+                    }
+                    bitmap[byteIndex++] = byte1;
+                    bitmap[byteIndex++] = byte2;
+                }
+
+                return bitmap;
+            } catch (error) {
+                console.error('处理字体文件时出错:', error);
+                return null;
+            }
         } else {
             alert('不支持的字体文件');
         }
@@ -221,6 +275,25 @@
         container.appendChild(wrapper);
     }
 
+    function handleKeyPress(event) {
+        // 仅在光标位于输入框内时生效
+        if (event.key === 'Enter' && document.activeElement.id === 'charInput') {
+            // 检查是否已选择字体
+            if (!fontData) {
+                alert('请先上传字体文件');
+                return;
+            }
+
+            // 检查是否输入了汉字
+            const input = document.getElementById('charInput').value;
+            if (!input.trim()) {
+                alert('请输入汉字');
+                return;
+            }
+
+            generateGlyphs();
+        }
+    }
 
     </script>
 </body>
