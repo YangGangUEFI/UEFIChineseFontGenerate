@@ -108,6 +108,7 @@ function extractCharacterBitmap(char) {
 }
 
 function generateGlyphs() {
+    console.time('总体处理时间');
     if (!fontData) {
         alert('请先上传字体文件');
         return;
@@ -121,27 +122,55 @@ function generateGlyphs() {
 
     const outputArea = document.getElementById('outputArea');
     const glyphPreview = document.getElementById('glyphPreview');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    canvas.width = 16;
+    canvas.height = 16;
 
     glyphPreview.innerHTML = '';
-    outputArea.value = '';
+    
+    // 收集所有数据
+    const previewDataArray = [];
+    const outputDataArray = [];
 
     for (let char of input) {
-        const bitmap = extractCharacterBitmap(char);
+        console.time(`处理字符"${char}"`);
+        const bitmap = extractCharacterBitmap(char, canvas, ctx);
+        
+        if (bitmap) {
+            console.time(`转换字符"${char}"为EFI格式`);
+            const binaryData = convertToEFIWideGlyph(bitmap, char);
+            console.timeEnd(`转换字符"${char}"为EFI格式`);
 
-        if (!bitmap) {
-            outputArea.value += `无法找到字符 ${char} 的字体数据\n`;
-            continue;
+            // 存储输出数据
+            outputDataArray.push(binaryData.fullOutput);
+            
+            // 存储预览数据
+            previewDataArray.push({
+                glyphData: binaryData.glyphData,
+                index: input.indexOf(char)
+            });
         }
-
-        const binaryData = convertToEFIWideGlyph(bitmap, char);
-
-        outputArea.value += binaryData.fullOutput;
-        let charIndex = input.indexOf(char);
-        renderGlyphPreview(binaryData.glyphData, glyphPreview, charIndex);
+        console.timeEnd(`处理字符"${char}"`);
     }
+
+    // 一次性输出所有字库数据
+    console.time('输出字库数据');
+    outputArea.value = outputDataArray.join('');
+    console.timeEnd('输出字库数据');
+
+    // 批量渲染所有预览
+    console.time('渲染所有预览');
+    previewDataArray.forEach(({glyphData, index}) => {
+        renderGlyphPreview(glyphData, glyphPreview, index);
+    });
+    console.timeEnd('渲染所有预览');
+    
+    console.timeEnd('总体处理时间');
 }
 
 function generateGlyphsFromRange() {
+    console.time('Unicode范围处理时间');
     if (!fontData) {
         alert('请先上传字体文件');
         return;
@@ -165,56 +194,93 @@ function generateGlyphsFromRange() {
 
     const outputArea = document.getElementById('outputArea');
     const glyphPreview = document.getElementById('glyphPreview');
-
     glyphPreview.innerHTML = '';
-    outputArea.value = '';
+    
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    canvas.width = 16;
+    canvas.height = 16;
 
-    let index = 0;
-    const processNextChar = () => {
-        if (index > end - start) {
-            document.body.removeChild(progressText);
-            if (!showPreview) {
-                glyphPreview.style.display = 'block';
-                glyphPreview.style.width = '100%';
-                glyphPreview.innerHTML = `
-                    <div style="
-                        color: #666;
-                        padding: 10px;
-                        text-align: left;
-                        width: 100%;
-                        display: block;
-                    ">字符数量（${charCount}个）超过20个，已禁用点阵预览</div>
-                `;
-            }
-            return;
-        }
-
-        const code = start + index;
-        const char = String.fromCodePoint(code);
-        const bitmap = extractCharacterBitmap(char);
-
-        if (bitmap) {
-            const binaryData = convertToEFIWideGlyph(bitmap, char);
-            outputArea.value += binaryData.fullOutput;
-
-            if (showPreview) {
-                renderGlyphPreview(binaryData.glyphData, glyphPreview, index);
-            }
-        } else {
-            outputArea.value += `无法找到字符 ${char} (U+${code.toString(16).toUpperCase()}) 的字体数据\n`;
-        }
-
-        progressText.textContent = `处理进度: ${Math.floor((index / (end - start + 1)) * 100)}%`;
-
-        index++;
-        requestAnimationFrame(processNextChar);
-    };
-
+    const previewDataArray = [];
+    const outputDataArray = [];
+    
+    // 添加进度显示
     const progressText = document.createElement('div');
-    progressText.id = 'progressText';
     document.body.appendChild(progressText);
 
-    processNextChar();
+    // 批处理大小
+    const BATCH_SIZE = 100;
+    let currentIndex = start;
+
+    function processBatch() {
+        console.time(`处理批次 ${currentIndex.toString(16)}`);
+        const batchEnd = Math.min(currentIndex + BATCH_SIZE - 1, end);
+        
+        for (let code = currentIndex; code <= batchEnd; code++) {
+            const char = String.fromCodePoint(code);
+            const bitmap = extractCharacterBitmap(char, canvas, ctx);
+
+            if (bitmap) {
+                const binaryData = convertToEFIWideGlyph(bitmap, char);
+                outputDataArray.push(binaryData.fullOutput);
+
+                if (showPreview) {
+                    previewDataArray.push({
+                        glyphData: binaryData.glyphData,
+                        index: code - start
+                    });
+                }
+            }
+        }
+        console.timeEnd(`处理批次 ${currentIndex.toString(16)}`);
+
+        // 更新进度（每批次只更新一次）
+        const progress = Math.floor(((batchEnd - start + 1) / charCount) * 100);
+        progressText.textContent = `处理进度: ${progress}% (${batchEnd - start + 1}/${charCount})`;
+
+        currentIndex = batchEnd + 1;
+
+        if (currentIndex <= end) {
+            // 使用requestIdleCallback在浏览器空闲时处理下一批
+            requestIdleCallback(() => processBatch(), { timeout: 1000 });
+        } else {
+            // 所有处理完成，一次性更新UI
+            finishProcessing();
+        }
+    }
+
+    function finishProcessing() {
+        console.time('完成处理');
+        
+        // 一次性输出所有字库数据
+        console.time('输出字库数据');
+        outputArea.value = outputDataArray.join('');
+        console.timeEnd('输出字库数据');
+
+        // 渲染预览
+        if (showPreview) {
+            console.time('渲染所有预览');
+            previewDataArray.forEach(({glyphData, index}) => {
+                renderGlyphPreview(glyphData, glyphPreview, index);
+            });
+            console.timeEnd('渲染所有预览');
+        } else {
+            glyphPreview.style.display = 'block';
+            glyphPreview.style.width = '100%';
+            glyphPreview.innerHTML = `
+                <div style="color: #666; padding: 10px; text-align: left; width: 100%; display: block;">
+                    字符数量（${charCount}个）超过20个，已禁用点阵预览
+                </div>
+            `;
+        }
+
+        document.body.removeChild(progressText);
+        console.timeEnd('完成处理');
+        console.timeEnd('Unicode范围处理时间');
+    }
+
+    // 开始处理第一批
+    processBatch();
 }
 
 function convertToEFIWideGlyph(bitmap, char) {
