@@ -31,6 +31,14 @@
     </div>
 
     <div>
+        <label for="unicodeRange">Unicode范围：</label>
+        <input type="text" id="unicodeRangeStart" placeholder="起始值 (例如: 4E00)" size="16">
+        <span>-</span>
+        <input type="text" id="unicodeRangeEnd" placeholder="结束值 (例如: 4E10)" size="16">
+        <button onclick="generateGlyphsFromRange()">生成字库</button>
+    </div>
+
+    <div>
         <h3>输出字库信息</h3>
         <textarea id="outputArea" readonly></textarea>
     </div>
@@ -171,6 +179,53 @@
         }
     }
 
+    function generateGlyphsFromRange() {
+        const start = parseInt(document.getElementById('unicodeRangeStart').value, 16);
+        const end = parseInt(document.getElementById('unicodeRangeEnd').value, 16);
+
+        if (isNaN(start) || isNaN(end)) {
+            alert('请输入有效的Unicode范围（十六进制）');
+            return;
+        }
+
+        if (start > end) {
+            alert('起始值不能大于结束值');
+            return;
+        }
+
+        const charCount = end - start + 1;
+        const showPreview = charCount <= 10;
+
+        const outputArea = document.getElementById('outputArea');
+        const glyphPreview = document.getElementById('glyphPreview');
+
+        glyphPreview.innerHTML = '';
+        outputArea.value = '';
+
+        let index = 0;
+        for (let code = start; code <= end; code++) {
+            const char = String.fromCodePoint(code);
+            const bitmap = extractCharacterBitmap(char);
+
+            if (!bitmap) {
+                outputArea.value += `无法找到字符 ${char} (U+${code.toString(16).toUpperCase()}) 的字体数据\n`;
+                continue;
+            }
+
+            const binaryData = convertToEFIWideGlyph(bitmap, char);
+            outputArea.value += binaryData.fullOutput;
+
+            if (showPreview) {
+                renderGlyphPreview(binaryData.glyphData, glyphPreview, index);
+            }
+            index++;
+        }
+
+        if (!showPreview) {
+            glyphPreview.innerHTML = '<p>字符数量过多，已禁用预览</p>';
+        }
+    }
+
     function convertToEFIWideGlyph(bitmap, char) {
         const extendedBitmap = extendBitmap(bitmap);
 
@@ -280,7 +335,7 @@
         if (event.key === 'Enter' && document.activeElement.id === 'charInput') {
             // 检查是否已选择字体
             if (!fontData) {
-                alert('请先上传字体文件');
+                alert('请先上字体文件');
                 return;
             }
 
