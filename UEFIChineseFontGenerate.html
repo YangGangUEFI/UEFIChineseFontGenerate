@@ -51,6 +51,7 @@
     <script>
     let fontData = null;
     let fontType = null;
+    let parsedFont = null;
 
     document.getElementById('fontFile').addEventListener('change', function(e) {
         const file = e.target.files[0];
@@ -70,6 +71,15 @@
         reader.onload = function(event) {
             fontData = event.target.result;
             fontType = fileExtension;
+
+            if (fontType === 'otf' || fontType === 'ttf') {
+                try {
+                    parsedFont = opentype.parse(fontData);
+                } catch (error) {
+                    console.error('解析字体文件时出错:', error);
+                    alert('字体文件解析失败');
+                }
+            }
         };
 
         if (fileExtension === 'hex') {
@@ -103,8 +113,7 @@
             return bitmap;
         } else if (fontType === 'otf' || fontType === 'ttf') {
             try {
-                const font = opentype.parse(fontData);
-                const glyph = font.charToGlyph(char);
+                const glyph = parsedFont.charToGlyph(char);
                 const bitmap = new Uint8Array(32);
 
                 // 创建一个临时的 canvas 来绘制字形
@@ -114,39 +123,44 @@
                 canvas.height = 16;
                 ctx.clearRect(0, 0, 16, 16);
 
-                // 设置绘制参数
-                ctx.fillStyle = 'black';
+                // 优化绘制参数
                 const path = glyph.getPath(0, 14, 16);
                 path.fill = 'black';
+
+                // 使用优化的绘制方法
+                ctx.fillStyle = 'black';
                 path.draw(ctx);
 
-                // 获取像素数据
+                // 获取像素数据并优化转换过程
                 const imageData = ctx.getImageData(0, 0, 16, 16);
                 const pixels = imageData.data;
+                const threshold = 128; // 添加阈值判断
 
-                // 将像素数据转换为位图格式
-                let byteIndex = 0;
+                // 优化位图转换逻辑
                 for (let y = 0; y < 16; y++) {
                     let byte1 = 0;
                     let byte2 = 0;
+                    const rowOffset = y * 16 * 4;
+
                     for (let x = 0; x < 16; x++) {
-                        // pixels: [r, g, b, a, r, g, b, a, ...]
-                        const pixelIndex = (y * 16 + x) * 4;
-                        const isBlack = pixels[pixelIndex+3] === 0xff; // 检查像素是否为黑色
+                        const pixelIndex = rowOffset + x * 4;
+                        // 使用 alpha 通道判断像素
+                        const isBlack = pixels[pixelIndex + 3] > threshold;
 
                         if (x < 8) {
-                            byte1 |= (isBlack ? 1 : 0) << (7 - (x % 8));
+                            byte1 |= (isBlack ? 1 : 0) << (7 - x);
                         } else {
-                            byte2 |= (isBlack ? 1 : 0) << (7 - (x % 8));
+                            byte2 |= (isBlack ? 1 : 0) << (15 - x);
                         }
                     }
-                    bitmap[byteIndex++] = byte1;
-                    bitmap[byteIndex++] = byte2;
+
+                    bitmap[y * 2] = byte1;
+                    bitmap[y * 2 + 1] = byte2;
                 }
 
                 return bitmap;
             } catch (error) {
-                console.error('处理字体文件时出错:', error);
+                console.error('处理字符时出错:', error);
                 return null;
             }
         } else {
@@ -194,7 +208,7 @@
         }
 
         const charCount = end - start + 1;
-        const showPreview = charCount <= 10;
+        const showPreview = charCount <= 20;
 
         const outputArea = document.getElementById('outputArea');
         const glyphPreview = document.getElementById('glyphPreview');
@@ -202,28 +216,46 @@
         glyphPreview.innerHTML = '';
         outputArea.value = '';
 
+        if (!showPreview) {
+            glyphPreview.innerHTML = `<p style="color: #666;">字符数量（${charCount}个）超过20个，已禁用点阵预览</p>`;
+        }
+
+        // 添加进度提示
+        const progressText = document.createElement('div');
+        progressText.id = 'progressText';
+        document.body.appendChild(progressText);
+
         let index = 0;
-        for (let code = start; code <= end; code++) {
+        const processNextChar = () => {
+            if (index > end - start) {
+                document.body.removeChild(progressText);
+                return;
+            }
+
+            const code = start + index;
             const char = String.fromCodePoint(code);
             const bitmap = extractCharacterBitmap(char);
 
-            if (!bitmap) {
+            if (bitmap) {
+                const binaryData = convertToEFIWideGlyph(bitmap, char);
+                outputArea.value += binaryData.fullOutput;
+
+                if (showPreview) {
+                    renderGlyphPreview(binaryData.glyphData, glyphPreview, index);
+                }
+            } else {
                 outputArea.value += `无法找到字符 ${char} (U+${code.toString(16).toUpperCase()}) 的字体数据\n`;
-                continue;
             }
 
-            const binaryData = convertToEFIWideGlyph(bitmap, char);
-            outputArea.value += binaryData.fullOutput;
+            // 更新进度
+            progressText.textContent = `处理进度: ${Math.floor((index / (end - start + 1)) * 100)}%`;
 
-            if (showPreview) {
-                renderGlyphPreview(binaryData.glyphData, glyphPreview, index);
-            }
             index++;
-        }
+            // 使用 requestAnimationFrame 优化性能
+            requestAnimationFrame(processNextChar);
+        };
 
-        if (!showPreview) {
-            glyphPreview.innerHTML = '<p>字符数量过多，已禁用预览</p>';
-        }
+        processNextChar();
     }
 
     function convertToEFIWideGlyph(bitmap, char) {
