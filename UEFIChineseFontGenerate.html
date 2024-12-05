@@ -24,6 +24,36 @@
         <input type="file" id="fontFile" accept=".hex,.otf,.ttf">
     </div>
 
+    <div class="input-hint">
+        <p>提示：</p>
+        <ul>
+            <li>可以直接输入汉字，按回车键或点击"生成字库"按钮生成</li>
+            <li>也可以输入Unicode范围，例如 4E00-9FFF 表示常用汉字范围</li>
+            <li>Unicode范围请使用16进制数值</li>
+        </ul>
+    </div>
+    <style>
+        .input-hint {
+            background: #f5f5f5;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .input-hint p {
+            margin: 0 0 5px 0;
+            font-weight: bold;
+        }
+        .input-hint ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .input-hint li {
+            margin: 3px 0;
+            color: #666;
+        }
+    </style>
+     
+
     <div>
         <label for="charInput">输入汉字：</label>
         <input type="text" id="charInput" placeholder="请输入汉字" onkeypress="handleKeyPress(event)">
@@ -170,7 +200,18 @@
     }
 
     function generateGlyphs() {
+        // 先检查是否已上传字体
+        if (!fontData) {
+            alert('请先上传字体文件');
+            return;
+        }
+
         const input = document.getElementById('charInput').value;
+        if (!input.trim()) {
+            alert('请输入汉字');
+            return;
+        }
+
         const outputArea = document.getElementById('outputArea');
         const glyphPreview = document.getElementById('glyphPreview');
 
@@ -188,12 +229,17 @@
             const binaryData = convertToEFIWideGlyph(bitmap, char);
 
             outputArea.value += binaryData.fullOutput;
-            let charIndex = input.indexOf(char)
+            let charIndex = input.indexOf(char);
             renderGlyphPreview(binaryData.glyphData, glyphPreview, charIndex);
         }
     }
 
     function generateGlyphsFromRange() {
+        if (!fontData) {
+            alert('请先上传字体文件');
+            return;
+        }
+
         const start = parseInt(document.getElementById('unicodeRangeStart').value, 16);
         const end = parseInt(document.getElementById('unicodeRangeEnd').value, 16);
 
@@ -216,19 +262,23 @@
         glyphPreview.innerHTML = '';
         outputArea.value = '';
 
-        if (!showPreview) {
-            glyphPreview.innerHTML = `<p style="color: #666;">字符数量（${charCount}个）超过20个，已禁用点阵预览</p>`;
-        }
-
-        // 添加进度提示
-        const progressText = document.createElement('div');
-        progressText.id = 'progressText';
-        document.body.appendChild(progressText);
-
         let index = 0;
         const processNextChar = () => {
             if (index > end - start) {
                 document.body.removeChild(progressText);
+                if (!showPreview) {
+                    glyphPreview.style.display = 'block';
+                    glyphPreview.style.width = '100%';
+                    glyphPreview.innerHTML = `
+                        <div style="
+                            color: #666;
+                            padding: 10px;
+                            text-align: left;
+                            width: 100%;
+                            display: block;
+                        ">字符数量（${charCount}个）超过20个，已禁用点阵预览</div>
+                    `;
+                }
                 return;
             }
 
@@ -247,13 +297,15 @@
                 outputArea.value += `无法找到字符 ${char} (U+${code.toString(16).toUpperCase()}) 的字体数据\n`;
             }
 
-            // 更新进度
             progressText.textContent = `处理进度: ${Math.floor((index / (end - start + 1)) * 100)}%`;
 
             index++;
-            // 使用 requestAnimationFrame 优化性能
             requestAnimationFrame(processNextChar);
         };
+
+        const progressText = document.createElement('div');
+        progressText.id = 'progressText';
+        document.body.appendChild(progressText);
 
         processNextChar();
     }
@@ -363,11 +415,10 @@
     }
 
     function handleKeyPress(event) {
-        // 仅在光标位于输入框内时生效
         if (event.key === 'Enter' && document.activeElement.id === 'charInput') {
             // 检查是否已选择字体
             if (!fontData) {
-                alert('请先上字体文件');
+                alert('请先上传字体文件');
                 return;
             }
 
